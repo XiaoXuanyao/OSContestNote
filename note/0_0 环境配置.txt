@@ -1,0 +1,101 @@
+1) VMware官网下最新免费版
+   Ubuntu注意留够内存，经尝试建议至少给磁盘32G空间
+   a) Ubuntu22.04安装IBus中文输入法:
+      sudo apt install ibus ibus-pinyin
+      im-config，根据提示继续，选择IBus作为默认的输入法框架。
+      注销，然后在设置中重新添加Chinese > pingyin
+   b) 安装deb软件包：
+      sudo dpkg -i <road>  安装
+                --list     列出
+                -r <name>  卸载
+   c) 安装clash verge：
+      ubuntu版本较低时：首先需要 sudo apt install libwebkit2gtk-4.1-0 (必须带版本号否则出错)
+      通过clash verge科学上网
+      然后sudo dpkg -i ~/Downloads/Clash.Verge__amd64.deb
+      安装好后sudo apt upgrade
+   d) 打开防火墙端口与SSH服务
+      开放端口：sudo ufw allow 22
+      安装SSH服务：sudo apt install openssh-server
+   
+2) sudo apt update/upgrade
+
+3) 安装curl：sudo apt install curl
+
+4) Rust开发环境配置
+   b) 安装 Rust 版本管理器 rustup 和 Rust 包管理器 cargo
+      设置环境变量：
+      export RUSTUP_DIST_SERVER=https://mirrors.ustc.edu.cn/rust-static
+      export RUSTUP_UPDATE_ROOT=https://mirrors.ustc.edu.cn/rust-static/rustup
+      sudo curl https://sh.rustup.rs -sSf | sh
+      输入1，使用默认安装
+   c) 激活环境变量
+      source $HOME/.cargo/env
+   d) 确认安装
+      rustc --version
+
+5) 配置rust包管理器的下载地址
+   a) 打开（如果没有创建）：~/.cargo/config
+   b) 加速第三方库的下载，在上面打开的文件中写入：
+      [source.crates-io]
+      replace-with = 'ustc'
+      [source.ustc]
+      registry = "sparse+https://mirrors.ustc.edu.cn/crates.io-index/"
+
+6) qemu模拟器安装
+   qemu安装在~/OSContest目录下
+   a) 安装依赖包
+      sudo apt install autoconf automake autotools-dev curl libmpc-dev libmpfr-dev libgmp-dev \
+              gawk build-essential bison flex texinfo gperf libtool patchutils bc \
+              zlib1g-dev libexpat-dev pkg-config  libglib2.0-dev libpixman-1-dev git tmux python3
+   b) 下载
+      wget https://download.qemu.org/qemu-7.0.0.tar.xz
+      tar xvJf qemu-7.0.0.tar.xz
+   c) 编译qemu
+      cd qemu-7.0.0
+      ./configure --target-list=riscv64-softmmu,riscv64-linux-user
+         I. 如果报错没有Ninja：sudo apt install ninja-build
+         II.如果报错：<PythonExternalProgram 'python3' -> ['/usr/bin/python3']> is not a valid python or it is missing distutils 则检查pip，如果没有pip：sudo apt install python3-pip
+      make -j$(nproc)
+   d) 配置qumu路径
+      vim ~/.bashrc
+      export PATH="$HOME/OSContest/qemu-7.0.0/build/:$PATH"
+      export PATH="$HOME/OSContest/qemu-7.0.0/build/riscv64-softmmu:$PATH"
+      export PATH="$HOME/OSContest/qemu-7.0.0/build/riscv64-linux-user:$PATH"
+      source ~/.bashrc
+   e) 确认qemu版本
+      qemu-system-riscv64 --version
+      qemu-riscv64 --version
+
+7) 试运行rCore-Tutorial
+   git clone https://github.com/LearningOS/rCore-Tutorial-Code-2025S
+   cd rCore-Tutorial-Code-2025S
+   git checkout ch1
+   cd os
+   LOG=DEBUG make run
+
+运行结果：
+Finished `release` profile [optimized + debuginfo] target(s) in 2.76s
+[rustsbi] RustSBI version 0.3.0-alpha.4, adapting to RISC-V SBI v1.0.0
+.______       __    __      _______.___________.  _______..______   __
+|   _  \     |  |  |  |    /       |           | /       ||   _  \ |  |
+|  |_)  |    |  |  |  |   |   (----`---|  |----`|   (----`|  |_)  ||  |
+|      /     |  |  |  |    \   \       |  |      \   \    |   _  < |  |
+|  |\  \----.|  `--'  |.----)   |      |  |  .----)   |   |  |_)  ||  |
+| _| `._____| \______/ |_______/       |__|  |_______/    |______/ |__|
+[rustsbi] Implementation     : RustSBI-QEMU Version 0.2.0-alpha.2
+[rustsbi] Platform Name      : riscv-virtio,qemu
+[rustsbi] Platform SMP       : 1
+[rustsbi] Platform Memory    : 0x80000000..0x88000000
+[rustsbi] Boot HART          : 0
+[rustsbi] Device Tree Region : 0x87000000..0x87000ef2
+[rustsbi] Firmware Address   : 0x80000000
+[rustsbi] Supervisor Address : 0x80200000
+[rustsbi] pmp01: 0x00000000..0x80000000 (-wr)
+[rustsbi] pmp02: 0x80000000..0x80200000 (---)
+[rustsbi] pmp03: 0x80200000..0x88000000 (xwr)
+[rustsbi] pmp04: 0x88000000..0x00000000 (-wr)
+[kernel] Hello, world!
+[DEBUG] [kernel] .rodata [0x80202000, 0x80203000)
+[ INFO] [kernel] .data [0x80203000, 0x80204000)
+[ WARN] [kernel] boot_stack top=bottom=0x80214000, lower_bound=0x80204000
+[ERROR] [kernel] .bss [0x80214000, 0x80215000)

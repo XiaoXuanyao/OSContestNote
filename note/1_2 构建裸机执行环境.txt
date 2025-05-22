@@ -1,0 +1,320 @@
+1) RustSBI
+   SBI 是 RISC-V 的一套二进制接口规范，用于操作系统内核和底层固件之间的通信，RustSBI 是它的一种实现。 操作系统内核与 RustSBI 的关系有点像应用与操作系统内核的关系，后者向前者提供一定的服务。只是SBI提供的服务很少， 比如关机，显示字符串等。
+   阅读 rCore-Tutorial-Code-2025S/os 样例源代码
+2) 裸机启动过程
+   用QEMU来模拟RISC-V 64计算机。
+   qemu-system-riscv64 \
+            -machine virt \
+            -nographic \
+            -bios $(BOOTLOADER) \     // $(BOOTLOADER)修改为BootLOader程序的二进制文件
+            -device loader,file=$(KERNEL_BIN),addr=$(KERNEL_ENTRY_PA)     //$(KERNEL_BIN)为操作系统的二进制文件，$(KERNEL_ENTRY_PA)为入口地址
+   暂且先把逻辑启动指令放在一边
+3) 实现关机功能
+   a) 新建一个目录 os2，存放实现关机功能的程序
+   b) 程序
+   
+	// main.rs
+	#![no_std]
+	#![no_main]
+	mod sbi;
+	mod panic;
+	#[unsafe(no_mangle)]
+	extern "C" fn _start() {
+	    crate::sbi::shutdown();
+	}
+	
+	// sbi.rs
+	use core::arch::asm;
+	#[inline(always)]
+	fn sbi_call(which: usize, arg0: usize, arg1: usize, arg2: usize) -> usize {
+	    let mut ret;
+	    unsafe {
+		asm!(
+		    "li x16, 0",
+		    "ecall",
+		    inlateout("x10") arg0 => ret,
+		    in("x11") arg1,
+		    in("x12") arg2,
+		    in("x17") which,
+		);
+	    }
+	    ret
+	}
+	const SBI_SHUTDOWN: usize = 8;
+	pub fn shutdown() -> ! {
+	    sbi_call(SBI_SHUTDOWN, 0, 0, 0);
+	    panic!("It should shutdown!");
+	}
+	
+	// panic.rs
+	use core::panic::PanicInfo;
+	#[panic_handler]
+	fn panic(_info: &PanicInfo) -> ! {
+	    loop {}
+	}
+
+   c) 新建.cargo/config.toml（必需，否则报错未知的寄存器x10等）
+	[build]
+	target = "riscv64gc-unknown-none-elf"
+
+   d) 尝试编译：cargo build --release，报错：(--release会生成ELF文件到release目录下，不加这个选项会生成到debug目录下)
+      error: linking with `rust-lld` failed: exit status: 1
+      = note: rust-lld: error: cannot find linker script src/linker.ld
+   e) 编译，编译通过
+      把ELF执行文件转成binary文件：rust-objcopy --binary-architecture=riscv64 target/riscv64gc-unknown-none-elf/release/os2 --strip-all -O binary target/riscv64gc-unknown-none-elf/release/os2.bin
+      如果报错：Command 'ust-objcopy' not found
+      sudo apt install cargo-binutils
+      再次执行把ELF执行文件转成binary文件命令，成功
+      然后保存电脑上所有需要保存的内容
+      加载运行：qemu-system-riscv64 -machine virt -nographic -bios bootloader/rustsbi-qemu.bin -device loader,file=target/riscv64gc-unknown-none-elf/release/os2.bin,addr=0x80200000
+      如果报错：qemu-system-riscv64: Unable to load the RISC-V firmware "../bootloader/rustsbi-qemu.bin"，把示例项目中的bootloader文件夹复制到自己的项目目录下
+      运行成功但程序没有退出，无法关闭：
+	[rustsbi] RustSBI version 0.3.0-alpha.4, adapting to RISC-V SBI v1.0.0
+	.______       __    __      _______.___________.  _______..______   __
+	|   _  \     |  |  |  |    /       |           | /       ||   _  \ |  |
+	|  |_)  |    |  |  |  |   |   (----`---|  |----`|   (----`|  |_)  ||  |
+	|      /     |  |  |  |    \   \       |  |      \   \    |   _  < |  |
+	|  |\  \----.|  `--'  |.----)   |      |  |  .----)   |   |  |_)  ||  |
+	| _| `._____| \______/ |_______/       |__|  |_______/    |______/ |__|
+	[rustsbi] Implementation     : RustSBI-QEMU Version 0.2.0-alpha.2
+	[rustsbi] Platform Name      : riscv-virtio,qemu
+	[rustsbi] Platform SMP       : 1
+	[rustsbi] Platform Memory    : 0x80000000..0x88000000
+	[rustsbi] Boot HART          : 0
+	[rustsbi] Device Tree Region : 0x87000000..0x87000ef2
+	[rustsbi] Firmware Address   : 0x80000000
+	[rustsbi] Supervisor Address : 0x80200000
+	[rustsbi] pmp01: 0x00000000..0x80000000 (-wr)
+	[rustsbi] pmp02: 0x80000000..0x80200000 (---)
+	[rustsbi] pmp03: 0x80200000..0x88000000 (xwr)
+	[rustsbi] pmp04: 0x88000000..0x00000000 (-wr)
+      通过rust-readobj分析os可执行程序：rust-readobj -h target/riscv64gc-unknown-none-elf/release/os2
+	Version: 1
+	Entry: 0x11234
+	ProgramHeaderOffset: 0x40
+	SectionHeaderOffset: 0xE950
+      入口地址并非RustSBI约定的0x80200000
+
+2) 设置正确的程序内存布局
+   a) 修改Cargo的配置文件来使用我们自己的连接脚本 os/src/linker.ld：
+      在.cargo/config.toml追加：
+	[target.riscv64gc-unknown-none-elf]
+	rustflags = [
+	    "-Clink-arg=-Tsrc/linker.ld", "-Cforce-frame-pointers=yes"
+	]
+   b) 创建 linker.ld
+	OUTPUT_ARCH(riscv)
+	ENTRY(_start)
+	BASE_ADDRESS = 0x80200000;
+	
+	SECTIONS
+	{
+	    . = BASE_ADDRESS;
+	    skernel = .;
+	
+	    stext = .;
+	    .text : {
+	        *(.text.entry)
+	        *(.text .text.*)
+	    }
+	
+	    . = ALIGN(4K);
+	    etext = .;
+	    srodata = .;
+	    .rodata : {
+	        *(.rodata .rodata.*)
+	    }
+	
+	    . = ALIGN(4K);
+	    erodata = .;
+	    sdata = .;
+	    .data : {
+	        *(.data .data.*)
+	    }
+	
+	    . = ALIGN(4K);
+	    edata = .;
+	    .bss : {
+	        *(.bss.stack)
+	        sbss = .;
+	        *(.bss .bss.*)
+	    }
+	
+	    . = ALIGN(4K);
+	    ebss = .;
+	    ekernel = .;
+	
+	    /DISCARD/ : {
+	        *(.eh_frame)
+	    }
+	}
+
+   c) 配置栈空间布局
+      创建src/entry.asm：
+	# os/src/entry.asm
+	    .section .text.entry
+	    .globl _start
+	_start:
+	    la sp, boot_stack_top
+	    call rust_main
+
+	    .section .bss.stack
+	    .globl boot_stack
+	boot_stack:
+	    .space 4096 * 16
+	    .globl boot_stack_top
+	boot_stack_top:
+   d) 将汇编代码嵌入main.rs，并声明rust_main：
+	core::arch::global_asm!(include_str!("entry.asm"));
+	#[unsafe(no_mangle)]
+	pub fn rust_main() -> ! {
+	    crate::sbi::shutdown();
+	}
+   e) 编译：cargo build --release，再次观察程序入口地址：rust-readobj -h target/riscv64gc-unknown-none-elf/release/os2
+	Version: 1
+	Entry: 0x80200000
+	ProgramHeaderOffset: 0x40
+	SectionHeaderOffset: 0x11908
+      指向了正确的地址
+      把ELF执行文件转成binary文件：rust-objcopy --binary-architecture=riscv64 target/riscv64gc-unknown-none-elf/release/os2 --strip-all -O binary target/riscv64gc-unknown-none-elf/release/os2.bin
+      加载运行：qemu-system-riscv64 -machine virt -nographic -bios bootloader/rustsbi-qemu.bin -device loader,file=target/riscv64gc-unknown-none-elf/release/os2.bin,addr=0x80200000
+      
+	hlchen@hlchen-VMware-Virtual-Platform:~/OSContest/os2$ qemu-system-riscv64 -machine virt -nographic -bios bootloader/rustsbi-qemu.bin -device loader,file=target/riscv64gc-unknown-none-elf/release/os2.bin,addr=0x80200000
+	[rustsbi] RustSBI version 0.3.0-alpha.4, adapting to RISC-V SBI v1.0.0
+	.______       __    __      _______.___________.  _______..______   __
+	|   _  \     |  |  |  |    /       |           | /       ||   _  \ |  |
+	|  |_)  |    |  |  |  |   |   (----`---|  |----`|   (----`|  |_)  ||  |
+	|      /     |  |  |  |    \   \       |  |      \   \    |   _  < |  |
+	|  |\  \----.|  `--'  |.----)   |      |  |  .----)   |   |  |_)  ||  |
+	| _| `._____| \______/ |_______/       |__|  |_______/    |______/ |__|
+	[rustsbi] Implementation     : RustSBI-QEMU Version 0.2.0-alpha.2
+	[rustsbi] Platform Name      : riscv-virtio,qemu
+	[rustsbi] Platform SMP       : 1
+	[rustsbi] Platform Memory    : 0x80000000..0x88000000
+	[rustsbi] Boot HART          : 0
+	[rustsbi] Device Tree Region : 0x87000000..0x87000ef2
+	[rustsbi] Firmware Address   : 0x80000000
+	[rustsbi] Supervisor Address : 0x80200000
+	[rustsbi] pmp01: 0x00000000..0x80000000 (-wr)
+	[rustsbi] pmp02: 0x80000000..0x80200000 (---)
+	[rustsbi] pmp03: 0x80200000..0x88000000 (xwr)
+	[rustsbi] pmp04: 0x88000000..0x00000000 (-wr)
+	hlchen@hlchen-VMware-Virtual-Platform:~/OSContest/os2$
+	
+	QEMU模拟的RISC-V 64计算机优雅地退出了！
+
+3) 清空.bss段
+   a) .bss段：Block Started by Symbol，用于存放未初始化或初始化为零的全局/静态变量，在可执行文件中，.bss段不占用实际磁盘空间，仅记录长度；但加载到内存时，操作系统需要为其分配空间并清零。在操作系统内核启动时，内存管理尚未初始化，无法依赖外部加载器自动清零，内核必须自己完成这一操作，否则，.bss 段可能残留内存中的随机数据（“脏数据”），导致未初始化变量值不确定，引发逻辑错误或安全问题（例如，内核中的静态变量可能被误用）
+   b) 在主程序中添加函数，并在rust_main中调用：
+	fn clear_bss() {
+	    extern "C" {
+		fn sbss();   // .bss段起始地址
+		fn ebss();   // .bss段终止地址
+	    }
+	    (sbss as usize..ebss as usize).for_each(|a| {
+		unsafe { (a as *mut u8).write_volatile(0) }
+	    });
+	}
+	……
+	pub fn rust_main() -> ! {
+	    clear_bss();
+	    crate::sbi::shutdown();
+	}
+      如果报错：error: extern blocks must be unsafe，则在extern "C"前添加unsafe关键字
+
+4) 添加裸机打印相关函数
+   a) 在sbi.rs中添加：
+	const SBI_CONSOLE_PUTCHAR: usize = 1;
+	pub fn console_putchar(c: usize) {
+	    sbi_call(SBI_CONSOLE_PUTCHAR, c, 0, 0);
+	}
+   b) 新建文件 src/console.rs：
+	use crate::sbi::console_putchar;
+	use core::fmt::{self, Write};
+
+	struct Stdout;
+
+	impl Write for Stdout {
+	    fn write_str(&mut self, s: &str) -> fmt::Result {
+		for c in s.chars() {
+		    console_putchar(c as usize);
+		}
+		Ok(())
+	    }
+	}
+
+	pub fn print(args: fmt::Arguments) {
+	    Stdout.write_fmt(args).unwrap();
+	}
+
+	#[macro_export]
+	macro_rules! print {
+	    ($fmt: literal $(, $($arg: tt)+)?) => {
+		$crate::console::print(format_args!($fmt $(, $($arg)+)?))
+	    }
+	}
+
+	#[macro_export]
+	macro_rules! println {
+	    ($fmt: literal $(, $($arg: tt)+)?) => {
+		$crate::console::print(format_args!(concat!($fmt, "\n") $(, $($arg)+)?))
+	    }
+	}
+   
+   c) 在 main.rs 中添加：
+      mod console;
+      并在rust_main()函数中添加：println!("Hello world!");
+   d) 编译运行，输出结果：
+	……
+	[rustsbi] pmp02: 0x80000000..0x80200000 (---)
+	[rustsbi] pmp03: 0x80200000..0x88000000 (xwr)
+	[rustsbi] pmp04: 0x88000000..0x00000000 (-wr)
+	Hello world!
+   e) 在panic中添加异常输出：
+      在panic.rs中追加：
+	use crate::sbi::shutdown;
+	use crate::println;
+	
+	#[panic_handler]
+	/// panic handler
+	fn panic(info: &PanicInfo) -> ! {
+	    if let Some(location) = info.location() {   // if let，如果info有location，则执行，否则执行else
+		println!(
+		    "[kernel] Panicked at {}:{} {}",
+		    location.file(),
+		    location.line(),
+		    info.message()
+		);
+	    } else {
+		println!("[kernel] Panicked: {}", info.message());
+	    }
+	    shutdown()
+	}
+      在main.rs的rust_main()方法中的 println!("Hello world!"); 后追加：
+	panic!("Error test occurred!");
+      语法：if let ... else ... 等价于：
+	match info.location() {
+	    Some(location) => {
+		// 使用 location
+	    }
+	    None => {
+		// 无 location 的情况
+	    }
+	}
+      直接使用原文中代码发生报错：unwrap()：method not found in `PanicMessage<'_>`
+      PanicInfo 的 message() 方法返回的是 Option<&PanicMessage> 类型，而 PanicMessage 并没有直接提供 unwrap() 方法。PanicMessage 是一个内部类型（未直接暴露给用户），它实现了 fmt::Display，因此直接格式化PanicMessage即可
+      // 为什么不一致？
+   f) 编译运行，进行测试，输出：
+	Hello world!
+	[kernel] Panicked at src/main.rs:23 Error test occurred!
+      测试成功。
+
+5) rust语法
+	(sbss as usize..ebss as usize).for_each(|a| {
+	    unsafe { (a as *mut u8).write_volatile(0) }
+	});
+   sbss as usize..ebss as usize：生成一个左闭右开的区间
+   .for_each：遍历前面区间中的每个整数值
+   |a|：取每个元素，作为变量a的值
+   a as *mut u8：转换为可变裸指针
+   .write_volatile(0)：赋值为0

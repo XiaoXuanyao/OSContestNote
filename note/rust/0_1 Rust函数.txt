@@ -1,0 +1,10 @@
+格式：
+fn func_name([args]) -> ret_type {
+    code_block……
+}
+1. 默认返回()（unit类型，类似void）
+2. 隐式返回没有分号的语句的返回值
+3. 显示返回： return xxx
+4. 不返回（发散函数）： fn func_name([args]) -> ! { ...
+   即：返回类型写 !
+   用于panic函数
